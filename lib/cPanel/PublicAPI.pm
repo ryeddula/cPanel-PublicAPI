@@ -29,16 +29,14 @@ package cPanel::PublicAPI;
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-our $VERSION = 2.0;
+our $VERSION = 2.1;
 
 use strict;
-use Socket           ();
-use Carp             ();
-use MIME::Base64     ();
-use HTTP::Tiny       ();
-use IO::Socket::INET ();
+use Carp            ();
+use MIME::Base64    ();
+use HTTP::Tiny      ();
+use HTTP::CookieJar ();
 
-my ( $whm_sock, $whm_sock_host, $loaded_ssl );
 our %CFG;
 
 my %PORT_DB = (
@@ -65,24 +63,9 @@ sub new {
     $self->{'debug'}   = $OPTS{'debug'}   || 0;
     $self->{'timeout'} = $OPTS{'timeout'} || 300;
 
-    if ( exists $OPTS{'usessl'} ) {
-        $self->{'usessl'} = $OPTS{'usessl'};
-    }
-    else {
-        $self->{'usessl'} = 1;
-    }
-    if ( exists $OPTS{'ssl_verify_mode'} ) {
-        $self->{'ssl_verify_mode'} = $OPTS{'ssl_verify_mode'};
-    }
-    else {
-        $self->{'ssl_verify_mode'} = 1;
-    }
-    if ( exists $OPTS{'keepalive'} ) {
-        $self->{'keepalive'} = int $OPTS{'keepalive'};
-    }
-    else {
-        $self->{'keepalive'} = 0;
-    }
+    $self->{'usessl'}          = exists $OPTS{'usessl'}          ? $OPTS{'usessl'}          : 1;
+    $self->{'ssl_verify_mode'} = exists $OPTS{'ssl_verify_mode'} ? $OPTS{'ssl_verify_mode'} : 1;
+    $self->{'keepalive'}       = exists $OPTS{'keepalive'}       ? $OPTS{'keepalive'}       : 0;
 
     if ( exists $OPTS{'ip'} ) {
         $self->{'ip'} = $OPTS{'ip'};
@@ -98,7 +81,7 @@ sub new {
         agent      => "cPanel::PublicAPI/$VERSION ",
         verify_SSL => $self->{'ssl_verify_mode'},
         keep_alive => $self->{'keepalive'},
-        timeout    => $self->{'timeout'} || 300,
+        timeout    => $self->{'timeout'},
     );
 
     if ( exists $OPTS{'error_log'} && $OPTS{'error_log'} ne 'STDERR' ) {
@@ -140,7 +123,6 @@ sub new {
             $self->debug("Got user password from the REMOTE_PASSWORD environment variables.") if $self->{'debug'};
             $OPTS{'pass'} = $ENV{'REMOTE_PASSWORD'};
         }
-
         else {
             Carp::confess('pass or access hash is a required parameter');
         }
@@ -154,6 +136,8 @@ sub new {
         $self->{'accesshash'} = $OPTS{'accesshash'};
         $self->debug("Using accesshash param from object creation") if $self->{'debug'};
     }
+
+    $self->_update_operating_mode();
 
     return $self;
 }
@@ -172,12 +156,14 @@ sub pass {
     my $self = shift;
     $self->{'pass'} = shift;
     delete $self->{'accesshash'};
+    $self->_update_operating_mode();
 }
 
 sub accesshash {
     my $self = shift;
     $self->{'accesshash'} = shift;
     delete $self->{'pass'};
+    $self->_update_operating_mode();
 }
 
 sub whm_api {
@@ -249,60 +235,44 @@ sub api_request {
     $self->{'error'} = undef;
     my $timeout = $self->{'timeout'} || 300;
 
-    my $authstr;
-    if ( exists $self->{'accesshash'} ) {
-        $self->{'accesshash'} =~ s/[\r\n]//g;
-        $authstr = 'WHM ' . $self->{'user'} . ':' . $self->{'accesshash'};
-    }
-    elsif ( exists $self->{'pass'} ) {
-        $authstr = 'Basic ' . MIME::Base64::encode_base64( $self->{'user'} . ':' . $self->{'pass'} );
-        $authstr =~ s/[\r\n]//g;
-    }
-    else {
-        die 'No user name or password set, cannot execute query.';
-    }
-
     my $orig_alarm = 0;
     my $page;
-    my $port;
 
-    if ( $self->{'usessl'} ) {
-        $port = $service =~ /^\d+$/ ? $service : $PORT_DB{$service}{'ssl'};
-    }
-    else {
-        $port = $service =~ /^\d+$/ ? $service : $PORT_DB{$service}{'plaintext'};
-    }
-
+    my $port = $self->_determine_port_for_service($service);
     $self->debug("Found port for service $service to be $port (usessl=$self->{'usessl'})") if $self->{'debug'};
 
     eval {
-        if ( !$self->{'user'} ) {
-            $self->error("You must specify a user to login as.");
-            die $self->{'error'};    #exit eval
+        $self->_validate_connection_settings();
+        if ( $self->{'operating_mode'} eq 'session' ) {
+            $self->_establish_session($service) if !( $self->{'security_tokens'}->{$service} && $self->{'cookie_jars'}->{$service} );
+            $self->{'ua'}->cookie_jar( $self->{'cookie_jars'}->{$service} );
         }
-        my $remote_server = $self->{'ip'}   || $self->{'host'};
-        my $server_name   = $self->{'host'} || $self->{'ip'};
-        if ( !$remote_server ) {
-            $self->error("You must set a host to connect to. (missing 'host' and 'ip' parameter)");
-            die $self->{'error'};    #exit eval
-        }
-        $server_name =~ s/\s*//g;
-        my $connection_string = $remote_server . ':' . $port;
-        my $attempts          = 0;
-        my $hassigpipe;
+
+        my $remote_server    = $self->{'remote_server'};
+        my $attempts         = 0;
         my $finished_request = 0;
+        my $hassigpipe;
 
         local $SIG{'ALRM'} = sub {
             $self->error('Connection Timed Out');
             die $self->{'error'};
         };
+
         local $SIG{'PIPE'} = sub { $hassigpipe = 1; };
         $orig_alarm = alarm($timeout);
 
         $formdata = $self->format_http_query($formdata) if ref $formdata;
 
         my $scheme = $self->{'usessl'} ? "https" : "http";
-        my $url = "$scheme://$remote_server:$port$uri";
+        my $url = "$scheme://$remote_server:$port";
+        if ( $self->{'operating_mode'} eq 'session' ) {
+            my $security_token = $self->{'security_tokens'}->{$service};
+            $url .= '/' . $self->{'security_tokens'}->{$service} . $uri;
+        }
+        else {
+            $url .= $uri;
+        }
+
         my $content;
         if ( $method eq 'POST' || $method eq 'PUT' ) {
             $content = $formdata;
@@ -310,6 +280,8 @@ sub api_request {
         else {
             $url .= "?$formdata";
         }
+        $self->debug("URL: $url") if $self->{'debug'};
+
         if ( !ref $headers ) {
             my @lines = split /\r\n/, $headers;
             $headers = {};
@@ -321,11 +293,9 @@ sub api_request {
                 push @{ $headers->{$key} }, $value;
             }
         }
+
         my $options = {
-            headers => {
-                %$headers,
-                'Authorization' => $authstr,
-            }
+            headers => $headers,
         };
         $options->{'content'} = $content if defined $content;
         my $ua = $self->{'ua'};
@@ -377,6 +347,82 @@ sub api_request {
     alarm($orig_alarm);    # Reset with parent's alarm value
 
     return ( $self->{'error'} ? 0 : 1, $self->{'error'}, \$page );
+}
+
+sub _validate_connection_settings {
+    my $self = shift;
+
+    if ( !$self->{'user'} ) {
+        $self->error("You must specify a user to login as.");
+        die $self->{'error'};
+    }
+
+    $self->{'remote_server'} = $self->{'ip'} || $self->{'host'};
+    if ( !$self->{'remote_server'} ) {
+        $self->error("You must set a host to connect to. (missing 'host' and 'ip' parameter)");
+        die $self->{'error'};
+    }
+}
+
+sub _update_operating_mode {
+    my $self = shift;
+
+    if ( exists $self->{'accesshash'} ) {
+        $self->{'accesshash'} =~ s/[\r\n]//g;
+        $self->{'ua'}->default_headers( { 'Authorization' => 'WHM ' . $self->{'user'} . ':' . $self->{'accesshash'} } );
+        $self->{'operating_mode'} = 'accesshash';
+    }
+    elsif ( exists $self->{'pass'} ) {
+        $self->{'operating_mode'} = 'session';
+
+        # This is called whenever the pass or accesshash is changed,
+        # so we reset the cookie jars, and tokens on such changes
+        $self->{'cookie_jars'}     = { map { $_ => undef } keys %PORT_DB };
+        $self->{'security_tokens'} = { map { $_ => undef } keys %PORT_DB };
+    }
+    else {
+        $self->error('You must specify an accesshash or password');
+        die $self->{'error'};
+    }
+}
+
+sub _establish_session {
+    my ( $self, $service ) = @_;
+
+    return if $self->{'operating_mode'} ne 'session';
+    return if $self->{'security_tokens'}->{$service} && $self->{'cookie_jars'}->{$service};
+
+    $self->{'cookie_jars'}->{$service} = HTTP::CookieJar->new();
+    $self->{'ua'}->cookie_jar( $self->{'cookie_jars'}->{$service} );
+
+    my $port   = $self->_determine_port_for_service($service);
+    my $scheme = $self->{'usessl'} ? "https" : "http";
+    my $url    = "$scheme://$self->{'remote_server'}:$port/login";
+    my $resp   = $self->{'ua'}->post_form(
+        $url,
+        { 'user' => $self->{'user'}, 'pass' => $self->{'pass'} },
+    );
+
+    if ( my $security_token = ( split /\//, $resp->{'headers'}->{'location'} )[1] ) {
+        $self->{'security_tokens'}->{$service} = $security_token;
+        return 1;
+    }
+
+    $self->error("Failed to establish session and parse security token: $resp->{'status'} $resp->{'reason'}");
+    die $self->{'error'};
+}
+
+sub _determine_port_for_service {
+    my ( $self, $service ) = @_;
+
+    my $port;
+    if ( $self->{'usessl'} ) {
+        $port = $service =~ /^\d+$/ ? $service : $PORT_DB{$service}{'ssl'};
+    }
+    else {
+        $port = $service =~ /^\d+$/ ? $service : $PORT_DB{$service}{'plaintext'};
+    }
+    return $port;
 }
 
 sub cpanel_api1_request {
@@ -551,3 +597,4 @@ sub format_http_query {
     }
     return $formdata;
 }
+
