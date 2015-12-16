@@ -198,6 +198,11 @@ sub whm_api {
     if ( $self->{'error'} ) {
         die $self->{'error'};
     }
+    elsif ( $$data =~ m/tfa_login_form/g ) {
+        $self->error("Two-Factor Authentication enabled on the account. Establish a session with the security token, or disable 2FA on the account");
+        die $self->{'error'};
+    }
+
     if ( defined $format && ( $format eq 'json' || $format eq 'xml' ) ) {
         return $$data;
     }
@@ -349,6 +354,22 @@ sub api_request {
     return ( $self->{'error'} ? 0 : 1, $self->{'error'}, \$page );
 }
 
+sub establish_tfa_session {
+    my ( $self, $service, $tfa_token ) = @_;
+    if ( !$tfa_token ) {
+        $self->error("No Two-Factor Authentication token specified");
+        die $self->{'error'};
+    }
+    if ( $self->{'operating_mode'} ne 'session' ) {
+        $self->error("TFA sessions are not supported when using accesshash keys");
+        die $self->{'error'};
+    }
+
+    undef $self->{'cookie_jars'}->{$service};
+    undef $self->{'security_tokens'}->{$service};
+    return $self->_establish_session( $service, $tfa_token );
+}
+
 sub _validate_connection_settings {
     my $self = shift;
 
@@ -387,7 +408,7 @@ sub _update_operating_mode {
 }
 
 sub _establish_session {
-    my ( $self, $service ) = @_;
+    my ( $self, $service, $tfa_token ) = @_;
 
     return if $self->{'operating_mode'} ne 'session';
     return if $self->{'security_tokens'}->{$service} && $self->{'cookie_jars'}->{$service};
@@ -400,7 +421,11 @@ sub _establish_session {
     my $url    = "$scheme://$self->{'remote_server'}:$port/login";
     my $resp   = $self->{'ua'}->post_form(
         $url,
-        { 'user' => $self->{'user'}, 'pass' => $self->{'pass'} },
+        {
+            'user' => $self->{'user'},
+            'pass' => $self->{'pass'},
+            ( $tfa_token ? ( 'tfa_token' => $tfa_token ) : () ),
+        },
     );
 
     if ( my $security_token = ( split /\//, $resp->{'headers'}->{'location'} )[1] ) {
@@ -447,6 +472,12 @@ sub cpanel_api1_request {
     $formdata->{ 'cpanel_' . $query_format . 'api_apiversion' } = 1;
 
     my ( $status, $statusmsg, $data ) = $self->api_request( $service, '/' . $query_format . '-api/cpanel', ( ( scalar keys %$formdata < 10 && _total_form_length( $formdata, 1024 ) < 1024 ) ? 'GET' : 'POST' ), $formdata );
+
+    if ( $$data =~ m/tfa_login_form/g ) {
+        $self->error("Two-Factor Authentication enabled on the account. Establish a session with the security token, or disable 2FA on the account");
+        die $self->{'error'};
+    }
+
     if ( defined $format && ( $format eq 'json' || $format eq 'xml' ) ) {
         return $$data;
     }
@@ -482,6 +513,11 @@ sub cpanel_api2_request {
     }
     $formdata->{ 'cpanel_' . $query_format . 'api_apiversion' } = 2;
     my ( $status, $statusmsg, $data ) = $self->api_request( $service, '/' . $query_format . '-api/cpanel', ( ( scalar keys %$formdata < 10 && _total_form_length( $formdata, 1024 ) < 1024 ) ? 'GET' : 'POST' ), $formdata );
+
+    if ( $$data =~ m/tfa_login_form/g ) {
+        $self->error("Two-Factor Authentication enabled on the account. Establish a session with the security token, or disable 2FA on the account");
+        die $self->{'error'};
+    }
 
     if ( defined $format && ( $format eq 'json' || $format eq 'xml' ) ) {
         return $$data;
