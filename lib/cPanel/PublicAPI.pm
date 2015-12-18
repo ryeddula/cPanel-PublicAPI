@@ -195,33 +195,14 @@ sub whm_api {
     my $uri = "/$query_format-api/$call";
 
     my ( $status, $statusmsg, $data ) = $self->api_request( 'whostmgr', $uri, 'POST', $formdata );
-    if ( $self->{'error'} ) {
-        die $self->{'error'};
-    }
-    elsif ( $$data =~ m/tfa_login_form/g ) {
-        $self->error("Two-Factor Authentication enabled on the account. Establish a session with the security token, or disable 2FA on the account");
-        die $self->{'error'};
-    }
-
-    if ( defined $format && ( $format eq 'json' || $format eq 'xml' ) ) {
-        return $$data;
-    }
-    else {
-        my $parsed_data;
-        eval { $parsed_data = $CFG{'serializer_can_deref'} ? $CFG{'api_serializer_obj'}->($data) : $CFG{'api_serializer_obj'}->($$data); };
-        if ( !ref $parsed_data ) {
-            $self->error("There was an issue with parsing the following response from cPanel or WHM: [data=[$$data]]");
-            die $self->{'error'};
+    return $self->_parse_returndata(
+        {
+            'caller' => 'whm_api',
+            'data'   => $data,
+            'format' => $format,
+            'call'   => $call
         }
-        if (
-            ( exists $parsed_data->{'error'} && $parsed_data->{'error'} =~ /Unknown App Requested/ ) ||    # xml-api v0 version
-            ( exists $parsed_data->{'metadata'}->{'reason'} && $parsed_data->{'metadata'}->{'reason'} =~ /Unknown app requested/ )
-          ) {                                                                                              # xml-api v1 version
-            $self->error("cPanel::PublicAPI::whm_api was called with the invalid API call of: $call.");
-            return;
-        }
-        return $parsed_data;
-    }
+    );
 }
 
 sub api_request {
@@ -473,27 +454,13 @@ sub cpanel_api1_request {
 
     my ( $status, $statusmsg, $data ) = $self->api_request( $service, '/' . $query_format . '-api/cpanel', ( ( scalar keys %$formdata < 10 && _total_form_length( $formdata, 1024 ) < 1024 ) ? 'GET' : 'POST' ), $formdata );
 
-    if ( $$data =~ m/tfa_login_form/g ) {
-        $self->error("Two-Factor Authentication enabled on the account. Establish a session with the security token, or disable 2FA on the account");
-        die $self->{'error'};
-    }
-
-    if ( defined $format && ( $format eq 'json' || $format eq 'xml' ) ) {
-        return $$data;
-    }
-    else {
-        my $parsed_data;
-        eval { $parsed_data = $CFG{'serializer_can_deref'} ? $CFG{'api_serializer_obj'}->($data) : $CFG{'api_serializer_obj'}->($$data); };
-        if ( !ref $parsed_data ) {
-            $self->error("There was an issue with parsing the following response from cPanel or WHM:\n$$data");
-            die $self->{'error'};
+    return $self->_parse_returndata(
+        {
+            'caller' => 'cpanel_api1',
+            'data'   => $data,
+            'format' => $format,
         }
-        if ( exists $parsed_data->{'event'}->{'reason'} && $parsed_data->{'event'}->{'reason'} =~ /failed: Undefined subroutine/ ) {
-            $self->error( "cPanel::PublicAPI::cpanel_api1_request was called with the invalid API1 call of: " . $parsed_data->{'module'} . '::' . $parsed_data->{'func'} );
-            return;
-        }
-        return $parsed_data;
-    }
+    );
 }
 
 sub cpanel_api2_request {
@@ -514,27 +481,81 @@ sub cpanel_api2_request {
     $formdata->{ 'cpanel_' . $query_format . 'api_apiversion' } = 2;
     my ( $status, $statusmsg, $data ) = $self->api_request( $service, '/' . $query_format . '-api/cpanel', ( ( scalar keys %$formdata < 10 && _total_form_length( $formdata, 1024 ) < 1024 ) ? 'GET' : 'POST' ), $formdata );
 
-    if ( $$data =~ m/tfa_login_form/g ) {
+    return $self->_parse_returndata(
+        {
+            'caller' => 'cpanel_api2',
+            'data'   => $data,
+            'format' => $format,
+        }
+    );
+}
+
+sub _parse_returndata {
+    my ( $self, $opts_hr ) = @_;
+
+    if ( $self->{'error'} ) {
+        die $self->{'error'};
+    }
+    elsif ( ${ $opts_hr->{'data'} } =~ m/tfa_login_form/g ) {
         $self->error("Two-Factor Authentication enabled on the account. Establish a session with the security token, or disable 2FA on the account");
         die $self->{'error'};
     }
 
-    if ( defined $format && ( $format eq 'json' || $format eq 'xml' ) ) {
-        return $$data;
+    if ( defined $opts_hr->{'format'} && ( $opts_hr->{'format'} eq 'json' || $opts_hr->{'format'} eq 'xml' ) ) {
+        return ${ $opts_hr->{'data'} };
     }
     else {
         my $parsed_data;
-        eval { $parsed_data = $CFG{'serializer_can_deref'} ? $CFG{'api_serializer_obj'}->($data) : $CFG{'api_serializer_obj'}->($$data); };
+        eval { $parsed_data = $CFG{'serializer_can_deref'} ? $CFG{'api_serializer_obj'}->( $opts_hr->{'data'} ) : $CFG{'api_serializer_obj'}->( ${ $opts_hr->{'data'} } ); };
         if ( !ref $parsed_data ) {
-            $self->error("There was an issue with parsing the following response from cPanel or WHM:\n$$data");
+            $self->error("There was an issue with parsing the following response from cPanel or WHM: [data=[${$opts_hr->{'data'}}]]");
             die $self->{'error'};
         }
-        if ( exists $parsed_data->{'cpanelresult'}->{'error'} && $parsed_data->{'cpanelresult'}->{'error'} =~ /Could not find function/ ) {    # xml-api v1 version
-            $self->error( "cPanel::PublicAPI::cpanel_api2_request was called with the invalid API2 call of: " . $parsed_data->{'cpanelresult'}->{'module'} . '::' . $parsed_data->{'cpanelresult'}->{'func'} );
-            return;
-        }
-        return $parsed_data;
+
+        my $error_check_dt = {
+            'whm_api'     => \&_check_whm_api_errors,
+            'cpanel_api1' => \&_check_cpanel_api1_errors,
+            'cpanel_api2' => \&_check_cpanel_api2_errors,
+        };
+        return $error_check_dt->{ $opts_hr->{'caller'} }->( $self, $opts_hr->{'call'}, $parsed_data );
     }
+}
+
+sub _check_whm_api_errors {
+    my ( $self, $call, $parsed_data ) = @_;
+
+    if (
+        ( exists $parsed_data->{'error'} && $parsed_data->{'error'} =~ /Unknown App Requested/ ) ||    # xml-api v0 version
+        ( exists $parsed_data->{'metadata'}->{'reason'} && $parsed_data->{'metadata'}->{'reason'} =~ /Unknown app\s+(?:\(.+\))?\s+requested/ )    # xml-api v1 version
+      ) {
+        $self->error("cPanel::PublicAPI::whm_api was called with the invalid API call of: $call.");
+        return;
+    }
+    return $parsed_data;
+}
+
+sub _check_cpanel_api1_errors {
+    my ( $self, undef, $parsed_data ) = @_;
+    if (
+        exists $parsed_data->{'event'}->{'reason'} && (
+            $parsed_data->{'event'}->{'reason'} =~ /failed: Undefined subroutine/ ||                                                              # pre-11.44 error message
+            $parsed_data->{'event'}->{'reason'} =~ m/failed: Can\'t use string/                                                                   # 11.44+ error message
+        )
+      ) {
+        $self->error( "cPanel::PublicAPI::cpanel_api1_request was called with the invalid API1 call of: " . $parsed_data->{'module'} . '::' . $parsed_data->{'func'} );
+        return;
+    }
+    return $parsed_data;
+}
+
+sub _check_cpanel_api2_errors {
+    my ( $self, undef, $parsed_data ) = @_;
+
+    if ( exists $parsed_data->{'cpanelresult'}->{'error'} && $parsed_data->{'cpanelresult'}->{'error'} =~ /Could not find function/ ) {           # xml-api v1 version
+        $self->error( "cPanel::PublicAPI::cpanel_api2_request was called with the invalid API2 call of: " . $parsed_data->{'cpanelresult'}->{'module'} . '::' . $parsed_data->{'cpanelresult'}->{'func'} );
+        return;
+    }
+    return $parsed_data;
 }
 
 sub _total_form_length {
