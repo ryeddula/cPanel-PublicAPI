@@ -332,12 +332,12 @@ sub api_request {
 
 sub establish_tfa_session {
     my ( $self, $service, $tfa_token ) = @_;
-    if ( !$tfa_token ) {
-        $self->error("No Two-Factor Authentication token specified");
+    if ( $self->{'operating_mode'} ne 'session' ) {
+        $self->error("2FA-authenticated sessions are not supported when using accesshash keys");
         die $self->{'error'};
     }
-    if ( $self->{'operating_mode'} ne 'session' ) {
-        $self->error("TFA sessions are not supported when using accesshash keys");
+    if ( !( $service && $tfa_token ) ) {
+        $self->error("You must specify the service name, and the 2FA token in order to establish a 2FA-authenticated session");
         die $self->{'error'};
     }
 
