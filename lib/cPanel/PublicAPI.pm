@@ -62,10 +62,7 @@ sub new {
 
     $self->{'debug'}   = $OPTS{'debug'}   || 0;
     $self->{'timeout'} = $OPTS{'timeout'} || 300;
-
-    $self->{'usessl'}          = exists $OPTS{'usessl'}          ? $OPTS{'usessl'}          : 1;
-    $self->{'ssl_verify_mode'} = exists $OPTS{'ssl_verify_mode'} ? $OPTS{'ssl_verify_mode'} : 1;
-    $self->{'keepalive'}       = exists $OPTS{'keepalive'}       ? int $OPTS{'keepalive'}   : 0;
+    $self->{'usessl'} = exists $OPTS{'usessl'} ? $OPTS{'usessl'} : 1;
 
     if ( exists $OPTS{'ip'} ) {
         $self->{'ip'} = $OPTS{'ip'};
@@ -79,8 +76,8 @@ sub new {
 
     $self->{'ua'} = HTTP::Tiny->new(
         agent      => "cPanel::PublicAPI/$VERSION ",
-        verify_SSL => $self->{'ssl_verify_mode'},
-        keep_alive => $self->{'keepalive'},
+        verify_SSL => ( exists $OPTS{'ssl_verify_mode'} ? $OPTS{'ssl_verify_mode'} : 1 ),
+        keep_alive => ( exists $OPTS{'keepalive'} ? int $OPTS{'keepalive'} : 0 ),
         timeout    => $self->{'timeout'},
     );
 
@@ -270,7 +267,7 @@ sub api_request {
             my @lines = split /\r\n/, $headers;
             $headers = {};
             foreach my $line (@lines) {
-                next unless length $line;
+                last unless length $line;
                 my ( $key, $value ) = split /:\s*/, $line, 2;
                 next unless length $key;
                 $headers->{$key} ||= [];
