@@ -65,7 +65,7 @@ sub new {
 
     $self->{'usessl'}          = exists $OPTS{'usessl'}          ? $OPTS{'usessl'}          : 1;
     $self->{'ssl_verify_mode'} = exists $OPTS{'ssl_verify_mode'} ? $OPTS{'ssl_verify_mode'} : 1;
-    $self->{'keepalive'}       = exists $OPTS{'keepalive'}       ? $OPTS{'keepalive'}       : 0;
+    $self->{'keepalive'}       = exists $OPTS{'keepalive'}       ? int $OPTS{'keepalive'}   : 0;
 
     if ( exists $OPTS{'ip'} ) {
         $self->{'ip'} = $OPTS{'ip'};
