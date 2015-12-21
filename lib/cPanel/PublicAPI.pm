@@ -208,8 +208,6 @@ sub whm_api {
 sub api_request {
     my ( $self, $service, $uri, $method, $formdata, $headers ) = @_;
 
-    $self->{'error'} = 0;
-
     $formdata ||= '';
     $method   ||= 'GET';
     $headers  ||= {};
@@ -218,7 +216,7 @@ sub api_request {
 
     $self->_init() if !exists $CFG{'init'};
 
-    $self->{'error'} = undef;
+    undef $self->{'error'};
     my $timeout = $self->{'timeout'} || 300;
 
     my $orig_alarm = 0;
