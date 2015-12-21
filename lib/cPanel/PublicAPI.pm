@@ -223,6 +223,7 @@ sub api_request {
     $self->debug("Found port for service $service to be $port (usessl=$self->{'usessl'})") if $self->{'debug'};
 
     eval {
+        $self->{'remote_server'} = $self->{'ip'} || $self->{'host'};
         $self->_validate_connection_settings();
         if ( $self->{'operating_mode'} eq 'session' ) {
             $self->_establish_session($service) if !( $self->{'security_tokens'}->{$service} && $self->{'cookie_jars'}->{$service} );
@@ -354,7 +355,6 @@ sub _validate_connection_settings {
         die $self->{'error'};
     }
 
-    $self->{'remote_server'} = $self->{'ip'} || $self->{'host'};
     if ( !$self->{'remote_server'} ) {
         $self->error("You must set a host to connect to. (missing 'host' and 'ip' parameter)");
         die $self->{'error'};
