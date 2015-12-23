@@ -491,7 +491,7 @@ sub _parse_returndata {
     if ( $self->{'error'} ) {
         die $self->{'error'};
     }
-    elsif ( ${ $opts_hr->{'data'} } =~ m/tfa_login_form/g ) {
+    elsif ( ${ $opts_hr->{'data'} } =~ m/tfa_login_form/ ) {
         $self->error("Two-Factor Authentication enabled on the account. Establish a session with the security token, or disable 2FA on the account");
         die $self->{'error'};
     }

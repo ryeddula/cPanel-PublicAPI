@@ -24,7 +24,7 @@ check_cpanel_version() or plan skip_all => 'This test requires cPanel version 54
 unshift @INC, '/usr/local/cpanel';
 require Cpanel::Security::Authn::TwoFactorAuth::Google;
 
-my $pubapi = check_api_access();
+my $pubapi = check_api_access_and_config();
 
 if ( !-e '/var/cpanel/users/papiunit' ) {
     my $password = generate_password();
@@ -108,7 +108,19 @@ sub check_cpanel_version {
     return 0;
 }
 
-sub check_api_access {
+sub check_api_access_and_config {
+
+    open( my $config_fh, '<', '/var/cpanel/cpanel.config' ) || BAIL_OUT('Could not load /var/cpanel/cpanel.config');
+    foreach my $line ( readline($config_fh) ) {
+        next if $line !~ /=/;
+        chomp $line;
+        my ( $key, $value ) = split( /=/, $line, 2 );
+        if ( $key eq 'SecurityPolicy::TwoFactorAuth' ) {
+            plan skip_all => '2FA security policy is disabled on the server' if !$value;
+            last;
+        }
+    }
+
     my $pubapi = cPanel::PublicAPI->new( 'ssl_verify_mode' => 0 );
     my $res = eval { $pubapi->whm_api('applist') };
     if ($@) {
