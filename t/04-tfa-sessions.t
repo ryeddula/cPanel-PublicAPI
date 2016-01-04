@@ -21,6 +21,13 @@ if ( !-e $homedir . '/.accesshash' ) {
 
 check_cpanel_version() or plan skip_all => 'This test requires cPanel version 54 or higher';
 
+# This forces HTTP::Tiny to use IO::Socket::INET over IO::Socket::IP,
+# we need to do this, as some older versions of IO::Socket::IP result
+# in random 'Could not close socket' errors.
+$ENV{'PERL_HTTP_TINY_IPV4_ONLY'} = 1;
+eval { require MIME::Base32; require Digest::SHA; 1; } or do {
+    plan skip_all => 'This test requires the MIME::Base32 and Digest::SHA modules';
+};
 unshift @INC, '/usr/local/cpanel';
 require Cpanel::Security::Authn::TwoFactorAuth::Google;
 
