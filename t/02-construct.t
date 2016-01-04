@@ -136,7 +136,7 @@ sub check_options {
             is( $pubapi->{'accesshash'}, $accesshash, 'accesshash default' );
         }
         else {
-            is( $pubapi->{'pass'}, $ENV{'REMOTE_PASS'}, 'password default' );
+            is( $pubapi->{'pass'}, $ENV{'REMOTE_PASSWORD'}, 'password default' );
         }
     }
 }

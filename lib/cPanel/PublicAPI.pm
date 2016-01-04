@@ -118,7 +118,7 @@ sub new {
         }
         elsif ( exists $ENV{'REMOTE_PASSWORD'} && $ENV{'REMOTE_PASSWORD'} && $ENV{'REMOTE_PASSWORD'} ne '__HIDDEN__' && exists $ENV{'SERVER_SOFTWARE'} && $ENV{'SERVER_SOFTWARE'} =~ /^cpsrvd/ ) {
             $self->debug("Got user password from the REMOTE_PASSWORD environment variables.") if $self->{'debug'};
-            $OPTS{'pass'} = $ENV{'REMOTE_PASSWORD'};
+            $self->{'pass'} = $ENV{'REMOTE_PASSWORD'};
         }
         else {
             Carp::confess('pass or access hash is a required parameter');
